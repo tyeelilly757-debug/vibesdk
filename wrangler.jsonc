@@ -53,7 +53,10 @@
     {
       "class_name": "UserAppSandboxService",
       "image": "./SandboxDockerfile",
+      // "image": "registry.cloudflare.com/vibesdk-production-userappsandboxservice:cfe197fc",
+      // Altering max_instances value will have no effect. Please use the MAX_SANDBOX_INSTANCES var instead.
       "max_instances": 1400,
+      // ATTENTION: Altering instance_type value will have no effect. Please use the SANDBOX_INSTANCE_TYPE var instead.
       "instance_type": {
         "vcpu": 4,
         "memory_mib": 8192,
@@ -66,7 +69,7 @@
     {
       "binding": "DB",
       "database_name": "vibesdk-db",
-      "database_id": "c4721a2b-b96a-428a-8b2a-b3d255b307e9",
+      "database_id": "cfea1b49-4f58-475c-b1d7-31150669043e",
       "migrations_dir": "migrations",
       "remote": true
     }
@@ -105,17 +108,27 @@
       "remote": true
     }
   ],
+  // "placement": {
+  //   "mode": "smart"
+  // },
   "migrations": [
     {
-      "new_sqlite_classes": ["CodeGeneratorAgent", "UserAppSandboxService"],
+      "new_sqlite_classes": [
+        "CodeGeneratorAgent",
+        "UserAppSandboxService"
+      ],
       "tag": "v1"
     },
     {
-      "new_sqlite_classes": ["DORateLimitStore"],
+      "new_sqlite_classes": [
+        "DORateLimitStore"
+      ],
       "tag": "v2"
     },
     {
-      "new_sqlite_classes": ["UserSecretsStore"],
+      "new_sqlite_classes": [
+        "UserSecretsStore"
+      ],
       "tag": "v3"
     }
   ],
@@ -138,9 +151,15 @@
     "CLOUDFLARE_AI_GATEWAY": "vibesdk-gateway",
     "PLATFORM_CAPABILITIES": {
       "features": {
-        "app": { "enabled": true },
-        "presentation": { "enabled": false },
-        "general": { "enabled": false }
+        "app": {
+          "enabled": true
+        },
+        "presentation": {
+          "enabled": false
+        },
+        "general": {
+          "enabled": false
+        }
       },
       "version": "1.0.0"
     },
