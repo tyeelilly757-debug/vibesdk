@@ -46,7 +46,7 @@
     {
       "class_name": "UserAppSandboxService",
       "image": "./SandboxDockerfile",
-      "max_instances": 1400,
+      "max_instances": 1,
       "instance_type": {
         "vcpu": 2,
         "memory_mib": 8192,
@@ -143,7 +143,7 @@
       "version": "1.0.0"
     },
     "CUSTOM_DOMAIN": "vibesdk.tyeelilly757.workers.dev",
-    "MAX_SANDBOX_INSTANCES": "10"
+    "MAX_SANDBOX_INSTANCES": "1"
   },
   "workers_dev": false,
   "preview_urls": false
