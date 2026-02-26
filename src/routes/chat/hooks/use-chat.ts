@@ -74,6 +74,8 @@ export function useChat({
 	const retryTimeouts = useRef<NodeJS.Timeout[]>([]);
 	// Track whether component is mounted and should attempt reconnects
 	const shouldReconnectRef = useRef(true);
+	// Track the current live socket so we can force singleton behavior
+	const currentSocketRef = useRef<WebSocket | null>(null);
 	// Track deployment timeout for cleanup
 	const deploymentTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 	// Track the latest connection attempt to avoid handling stale socket events
@@ -284,12 +286,31 @@ export function useChat({
 			connectionStatus.current = isRetry ? 'retrying' : 'connecting';
 
 			try {
+				// Mark this attempt first so stale socket events are ignored immediately
+				const myAttemptId = ++connectAttemptIdRef.current;
+
+				// Enforce a single active socket/attempt
+				if (currentSocketRef.current) {
+					try {
+						currentSocketRef.current.close();
+					} catch (closeError) {
+						logger.warn('Failed to close previous socket:', closeError);
+					}
+				}
+
 				logger.debug('🔗 Attempting WebSocket connection to:', wsUrl);
 				const ws = new WebSocket(wsUrl);
+				currentSocketRef.current = ws;
 				setWebsocket(ws);
-
-				// Mark this attempt id
-				const myAttemptId = ++connectAttemptIdRef.current;
+				let attemptFailureHandled = false;
+				const handleAttemptFailure = (reason: string) => {
+					if (attemptFailureHandled) return;
+					attemptFailureHandled = true;
+					clearTimeout(connectionTimeout);
+					if (myAttemptId !== connectAttemptIdRef.current) return;
+					if (!shouldReconnectRef.current) return;
+					handleConnectionFailureRef.current?.(wsUrl, disableGenerate, reason);
+				};
 
 				// Connection timeout - if connection doesn't open within 30 seconds
 				const connectionTimeout = setTimeout(() => {
@@ -298,7 +319,7 @@ export function useChat({
 					if (ws.readyState === WebSocket.CONNECTING) {
 						logger.warn('⏰ WebSocket connection timeout');
 						ws.close();
-						handleConnectionFailureRef.current?.(wsUrl, disableGenerate, 'Connection timeout');
+						handleAttemptFailure('Connection timeout');
 					}
 				}, 30000);
 
@@ -350,16 +371,17 @@ export function useChat({
 				});
 
 				ws.addEventListener('error', (error) => {
-					clearTimeout(connectionTimeout);
 					// Only handle error for the latest attempt and when we should reconnect
 					if (myAttemptId !== connectAttemptIdRef.current) return;
 					if (!shouldReconnectRef.current) return;
 					logger.error('❌ WebSocket error:', error);
-					handleConnectionFailureRef.current?.(wsUrl, disableGenerate, 'WebSocket error');
+					handleAttemptFailure('WebSocket error');
 				});
 
 				ws.addEventListener('close', (event) => {
-					clearTimeout(connectionTimeout);
+					if (currentSocketRef.current === ws) {
+						currentSocketRef.current = null;
+					}
 					logger.info(
 						`🔌 WebSocket connection closed with code ${event.code}: ${event.reason || 'No reason provided'}`,
 						event,
@@ -368,11 +390,14 @@ export function useChat({
 					if (myAttemptId !== connectAttemptIdRef.current) return;
 					if (!shouldReconnectRef.current) return;
 					// Retry on any close while mounted (including 1000) to improve resilience
-					handleConnectionFailureRef.current?.(wsUrl, disableGenerate, `Connection closed (code: ${event.code})`);
+					handleAttemptFailure(`Connection closed (code: ${event.code})`);
 				});
 
 				return function disconnect() {
 					clearTimeout(connectionTimeout);
+					if (currentSocketRef.current === ws) {
+						currentSocketRef.current = null;
+					}
 					ws.close();
 				};
 			} catch (error) {
@@ -386,11 +411,23 @@ export function useChat({
 	// Handle connection failures with exponential backoff retry
 	const handleConnectionFailure = useCallback(
 		(wsUrl: string, disableGenerate: boolean, reason: string) => {
+			if (!shouldReconnectRef.current) return;
 			connectionStatus.current = 'failed';
 			
 			if (retryCount.current >= maxRetries) {
 				logger.error(`💥 WebSocket connection failed permanently after ${maxRetries + 1} attempts`);
 				sendMessage(createAIMessage('websocket_failed', `🚨 Connection failed permanently after ${maxRetries + 1} attempts.\n\n❌ Reason: ${reason}\n\n🔄 Please refresh the page to try again.`));
+				shouldReconnectRef.current = false;
+				retryTimeouts.current.forEach(clearTimeout);
+				retryTimeouts.current = [];
+				if (currentSocketRef.current) {
+					try {
+						currentSocketRef.current.close();
+					} catch (closeError) {
+						logger.warn('Failed to close socket after permanent failure:', closeError);
+					}
+					currentSocketRef.current = null;
+				}
 				
 				// Debug logging for permanent failure
 				onDebugMessage?.('error',
@@ -412,6 +449,9 @@ export function useChat({
 			
 			sendMessage(createAIMessage('websocket_retrying', `🔄 Connection failed. Retrying in ${Math.ceil(actualDelay / 1000)} seconds... (attempt ${retryCount.current + 1}/${maxRetries + 1})\n\n❌ Reason: ${reason}`, true));
 
+			// Keep only one pending retry timer at a time.
+			retryTimeouts.current.forEach(clearTimeout);
+			retryTimeouts.current = [];
 			const timeoutId = setTimeout(() => {
 				connectWithRetryRef.current?.(wsUrl, { disableGenerate, isRetry: true });
 			}, actualDelay);
@@ -622,6 +662,14 @@ export function useChat({
             shouldReconnectRef.current = false;
             retryTimeouts.current.forEach(clearTimeout);
             retryTimeouts.current = [];
+			if (currentSocketRef.current) {
+				try {
+					currentSocketRef.current.close();
+				} catch (closeError) {
+					logger.warn('Failed to close socket on unmount:', closeError);
+				}
+				currentSocketRef.current = null;
+			}
             // Clear deployment timeout on unmount
             if (deploymentTimeoutRef.current) {
                 clearTimeout(deploymentTimeoutRef.current);
