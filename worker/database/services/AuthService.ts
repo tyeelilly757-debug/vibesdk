@@ -165,9 +165,10 @@ export class AuthService extends BaseService {
             }
             
             logger.error('Registration error', error);
+            const rawMessage = error instanceof Error ? error.message : String(error);
             throw new SecurityError(
                 SecurityErrorType.INVALID_INPUT,
-                'Registration failed',
+                `Registration failed: ${rawMessage}`,
                 500
             );
         }
@@ -237,9 +238,10 @@ export class AuthService extends BaseService {
             }
             
             logger.error('Login error', error);
+            const rawMessage = error instanceof Error ? error.message : String(error);
             throw new SecurityError(
                 SecurityErrorType.UNAUTHORIZED,
-                'Login failed',
+                `Login failed: ${rawMessage}`,
                 500
             );
         }

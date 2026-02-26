@@ -125,8 +125,9 @@ export class AuthController extends BaseController {
             if (securityLikeError) {
                 return AuthController.createErrorResponse(securityLikeError.message, securityLikeError.statusCode);
             }
-            
-            return AuthController.handleError(error, 'register user');
+
+            const fallbackMessage = error instanceof Error ? error.message : String(error);
+            return AuthController.createErrorResponse(fallbackMessage || 'Failed to register user', 500);
         }
     }
     
@@ -188,8 +189,9 @@ export class AuthController extends BaseController {
             if (securityLikeError) {
                 return AuthController.createErrorResponse(securityLikeError.message, securityLikeError.statusCode);
             }
-            
-            return AuthController.handleError(error, 'login user');
+
+            const fallbackMessage = error instanceof Error ? error.message : String(error);
+            return AuthController.createErrorResponse(fallbackMessage || 'Failed to login user', 500);
         }
     }
     
