@@ -7,7 +7,7 @@
 		"setup": "tsx scripts/setup.ts",
 		"prepare": "husky",
 		"dev": "DEV_MODE=true vite",
-		"build": "tsc -b --incremental && vite build && node scripts/force-safe-container-limits.mjs",
+		"build": "node scripts/reset-cloudflare-build-state.mjs && tsc -b --incremental && vite build && node scripts/force-safe-container-limits.mjs",
 		"typecheck": "tsc -b --incremental --noEmit",
 		"lint": "eslint .",
 		"preview": "npm run build && vite preview",
