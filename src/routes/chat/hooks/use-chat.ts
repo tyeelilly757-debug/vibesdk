@@ -375,8 +375,17 @@ export function useChat({
 
 				ws.addEventListener('close', (event) => {
 					clearTimeout(connectionTimeout);
+					const rawCloseCode = (event as CloseEvent | Event & { code?: unknown }).code;
+					const parsedCloseCode =
+						typeof rawCloseCode === 'number'
+							? rawCloseCode
+							: typeof rawCloseCode === 'string'
+								? Number.parseInt(rawCloseCode, 10)
+								: Number.NaN;
+					const hasNumericCloseCode = Number.isFinite(parsedCloseCode);
+					const closeCodeLabel = hasNumericCloseCode ? String(parsedCloseCode) : 'unknown';
 					logger.info(
-						`🔌 WebSocket connection closed with code ${event.code}: ${event.reason || 'No reason provided'}`,
+						`🔌 WebSocket connection closed with code ${closeCodeLabel}: ${event.reason || 'No reason provided'}`,
 						event,
 					);
 					// Only handle close for the latest attempt and when we should reconnect
@@ -385,15 +394,15 @@ export function useChat({
 
 					// Normal closures happen during transient backend restarts/rollouts.
 					// Reconnect without burning retry budget to avoid false permanent failures.
-					if (event.code === 1000) {
-						failOnce(`Connection closed (code: ${event.code})`, {
+					if (parsedCloseCode === 1000) {
+						failOnce(`Connection closed (code: ${closeCodeLabel})`, {
 							countTowardsRetry: false,
 							retryDelayMs: 1000,
 						});
 						return;
 					}
 
-					failOnce(`Connection closed (code: ${event.code})`);
+					failOnce(`Connection closed (code: ${closeCodeLabel})`);
 				});
 
 				return function disconnect() {
