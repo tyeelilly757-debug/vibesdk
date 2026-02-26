@@ -146,7 +146,12 @@ export function LoginModal({
 			if (mode === 'login' && onEmailLogin) {
 				await onEmailLogin({ email, password });
 			} else if (mode === 'register' && onRegister) {
-				await onRegister({ email, password, name: name.trim() });
+				const trimmedName = name.trim();
+				await onRegister({
+					email,
+					password,
+					name: trimmedName.length > 0 ? trimmedName : undefined,
+				});
 			}
 			// Don't auto-close here - let the parent handle success/error
 		} catch (err) {
