@@ -596,6 +596,27 @@ export function useChat({
 				// Allow retry on failure
 				connectionStatus.current = 'idle';
 				logger.error('Error initializing code generation:', error);
+
+				// Recover from stale/foreign chat URLs by redirecting to a new chat.
+				// This prevents users getting stuck when ownership checks reject an old agentId.
+				const isOwnershipError =
+					error instanceof Error &&
+					/only access your own resources|forbidden|insufficient_permissions/i.test(
+						error.message,
+					);
+				if (isOwnershipError && urlChatId && urlChatId !== 'new') {
+					sendMessage(
+						createAIMessage(
+							'chat_ownership_reset',
+							'This chat is linked to a different account. Starting a new chat for you...',
+						),
+					);
+					setTimeout(() => {
+						window.location.replace('/chat/new');
+					}, 250);
+					return;
+				}
+
 				if (error instanceof RateLimitExceededError) {
 					const rateLimitMessage = handleRateLimitError(error.details, onDebugMessage);
 					setMessages(prev => [...prev, rateLimitMessage]);
