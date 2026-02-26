@@ -2,8 +2,45 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 const projectRoot = process.cwd();
-const generatedWranglerPath = path.join(projectRoot, 'dist', 'vibesdk', 'wrangler.json');
+const sourceWranglerPath = path.join(projectRoot, 'wrangler.jsonc');
 const deployConfigPath = path.join(projectRoot, '.wrangler', 'deploy', 'config.json');
+
+function getExpectedWorkerName() {
+	try {
+		const sourceConfigRaw = fs.readFileSync(sourceWranglerPath, 'utf8');
+		const match = sourceConfigRaw.match(/"name"\s*:\s*"([^"]+)"/);
+		if (match?.[1]) {
+			return match[1];
+		}
+	} catch {
+		// Fall back to default when source config is not readable.
+	}
+
+	return 'vibesdk';
+}
+
+function getGeneratedWranglerPaths() {
+	const distPath = path.join(projectRoot, 'dist');
+	if (!fs.existsSync(distPath)) {
+		return [];
+	}
+
+	const entries = fs.readdirSync(distPath, { withFileTypes: true });
+	const paths = [];
+
+	for (const entry of entries) {
+		if (!entry.isDirectory()) {
+			continue;
+		}
+
+		const candidate = path.join(distPath, entry.name, 'wrangler.json');
+		if (fs.existsSync(candidate)) {
+			paths.push(candidate);
+		}
+	}
+
+	return paths;
+}
 
 function stripRouteConfig(config) {
 	let patched = false;
@@ -87,9 +124,17 @@ function patchJsonFile(filePath, patcher, logPrefix) {
 }
 
 function main() {
-	patchJsonFile(
-		generatedWranglerPath,
-		(config) => {
+	const expectedWorkerName = getExpectedWorkerName();
+	const generatedWranglerPaths = getGeneratedWranglerPaths();
+
+	if (generatedWranglerPaths.length === 0) {
+		console.log('[force-safe-container-limits] Skipping: no generated dist/*/wrangler.json found');
+	}
+
+	for (const generatedWranglerPath of generatedWranglerPaths) {
+		patchJsonFile(
+			generatedWranglerPath,
+			(config) => {
 			let patched = false;
 			if (!Array.isArray(config.containers)) {
 				console.log('[force-safe-container-limits] No containers array found in generated wrangler config');
@@ -108,6 +153,12 @@ function main() {
 				patched = true;
 			}
 
+			// Force generated configs to keep the canonical worker name.
+			if (config.name !== expectedWorkerName) {
+				config.name = expectedWorkerName;
+				patched = true;
+			}
+
 			// Keep deployment on workers.dev to avoid route API failures.
 			if (stripRouteConfig(config)) {
 				patched = true;
@@ -117,10 +168,21 @@ function main() {
 		},
 		'[force-safe-container-limits]',
 	);
+	}
 
 	patchJsonFile(
 		deployConfigPath,
-		(config) => stripRouteConfig(config),
+		(config) => {
+			let patched = false;
+			if (stripRouteConfig(config)) {
+				patched = true;
+			}
+			if (config.name && config.name !== expectedWorkerName) {
+				config.name = expectedWorkerName;
+				patched = true;
+			}
+			return patched;
+		},
 		'[force-safe-container-limits]',
 	);
 }
