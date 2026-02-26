@@ -15,7 +15,6 @@ import { ApiResponse, ControllerResponse } from '../types';
 import { RouteContext } from '../../types/route-context';
 import { AppService, ModelConfigService } from '../../../database';
 import { ModelConfig, credentialsToRuntimeOverrides } from '../../../agents/inferutils/config.types';
-import { RateLimitService } from '../../../services/rate-limit/rateLimits';
 import { validateWebSocketOrigin } from '../../../middleware/security/websocket';
 import { createLogger } from '../../../logger';
 import { getPreviewDomain } from 'worker/utils/urls';
