@@ -112,17 +112,6 @@
       "tag": "v3"
     }
   ],
-  "routes": [
-    {
-      "pattern": "build.cloudflare.dev",
-      "custom_domain": true
-    },
-    {
-      "pattern": "*build-preview.cloudflare.dev/*",
-      "custom_domain": false,
-      "zone_id": "db01fac4261b2604aacad8410443a3e2"
-    }
-  ],
   "vars": {
     "TEMPLATES_REPOSITORY": "https://github.com/cloudflare/vibesdk-templates",
     "ALLOWED_EMAIL": "tyeelilly757@gmail.com",
@@ -145,6 +134,6 @@
     "CUSTOM_DOMAIN": "vibesdk.tyeelilly757.workers.dev",
     "MAX_SANDBOX_INSTANCES": "1"
   },
-  "workers_dev": false,
-  "preview_urls": false
+  "workers_dev": true,
+  "preview_urls": true
 }
