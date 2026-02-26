@@ -55,7 +55,9 @@ export class CodingAgentController extends BaseController {
             this.logger.info('Starting code generation process');
 
             const url = new URL(request.url);
-            const hostname = url.hostname === 'localhost' ? `localhost:${url.port}`: getPreviewDomain(env);
+            const hostname = url.hostname === 'localhost'
+                ? `localhost:${url.port}`
+                : (getPreviewDomain(env) || url.host);
             // Parse the query from the request body
             let body: CodeGenArgs;
             try {
