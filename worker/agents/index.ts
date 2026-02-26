@@ -137,8 +137,20 @@ async function handleAITemplateSelection(args: Omit<TemplateQueryArgs, 'selected
     const { env, inferenceContext, query, projectType, images, logger } = args;
 
     const templatesResponse = await SandboxSdkClient.listTemplates();
-    if (!templatesResponse?.success) {
-        throw new Error(`Failed to fetch templates from sandbox service, ${templatesResponse.error}`);
+    if (!templatesResponse?.success || templatesResponse.templates.length === 0) {
+        logger.warn('Template catalog unavailable; falling back to scratch', {
+            error: templatesResponse?.error,
+        });
+        const scratch = createScratchTemplateDetails();
+        const selection: TemplateSelection = {
+            selectedTemplateName: '',
+            reasoning: 'Template catalog unavailable, using scratch template',
+            useCase: 'General',
+            complexity: 'moderate',
+            styleSelection: 'Custom',
+            projectType: projectType === 'auto' ? 'app' : projectType,
+        };
+        return { templateDetails: scratch, selection, projectType: selection.projectType };
     }
 
     const aiSelection = await selectTemplate({
@@ -197,5 +209,22 @@ export async function getTemplateForQuery(
     }
 
     // Flow 3: AI template selection
-    return handleAITemplateSelection({ env, inferenceContext, query, projectType, images, logger });
+    try {
+        return await handleAITemplateSelection({ env, inferenceContext, query, projectType, images, logger });
+    } catch (error) {
+        logger.warn('AI template selection failed; falling back to scratch', {
+            error: error instanceof Error ? error.message : String(error),
+        });
+        const scratch = createScratchTemplateDetails();
+        const fallbackProjectType = projectType === 'auto' ? 'app' : projectType;
+        const selection: TemplateSelection = {
+            selectedTemplateName: '',
+            reasoning: 'AI template selection failed, using scratch template',
+            useCase: 'General',
+            complexity: 'moderate',
+            styleSelection: 'Custom',
+            projectType: fallbackProjectType,
+        };
+        return { templateDetails: scratch, selection, projectType: fallbackProjectType };
+    }
 }
