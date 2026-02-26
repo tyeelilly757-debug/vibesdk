@@ -38,6 +38,23 @@ export class AuthController extends BaseController {
         return (!!env.GOOGLE_CLIENT_ID && !!env.GOOGLE_CLIENT_SECRET) || 
                (!!env.GITHUB_CLIENT_ID && !!env.GITHUB_CLIENT_SECRET);
     }
+
+    private static normalizeEmail(email: string): string {
+        return email.trim().toLowerCase();
+    }
+
+    private static isEmailAllowed(env: Env, email: string): boolean {
+        const rawAllowed = env.ALLOWED_EMAIL?.trim();
+        if (!rawAllowed) return true;
+
+        const requested = AuthController.normalizeEmail(email);
+        const allowedList = rawAllowed
+            .split(',')
+            .map((item) => AuthController.normalizeEmail(item))
+            .filter(Boolean);
+
+        return allowedList.includes(requested);
+    }
     
     /**
      * Register a new user
@@ -60,9 +77,9 @@ export class AuthController extends BaseController {
 
             const validatedData = registerSchema.parse(bodyResult.data);
 
-            if (env.ALLOWED_EMAIL && validatedData.email !== env.ALLOWED_EMAIL) {
+            if (!AuthController.isEmailAllowed(env, validatedData.email)) {
                 return AuthController.createErrorResponse(
-                    'Email Whitelisting is enabled. Please use the allowed email to register.',
+                    'Email allowlist is enabled. Use the configured allowed email address to register.',
                     403
                 );
             }
@@ -115,9 +132,9 @@ export class AuthController extends BaseController {
 
             const validatedData = loginSchema.parse(bodyResult.data);
 
-            if (env.ALLOWED_EMAIL && validatedData.email !== env.ALLOWED_EMAIL) {
+            if (!AuthController.isEmailAllowed(env, validatedData.email)) {
                 return AuthController.createErrorResponse(
-                    'Email Whitelisting is enabled. Please use the allowed email to login.',
+                    'Email allowlist is enabled. Use the configured allowed email address to log in.',
                     403
                 );
             }
