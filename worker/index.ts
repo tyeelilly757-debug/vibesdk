@@ -142,16 +142,14 @@ const worker = {
 	async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
         // logger.info(`Received request: ${request.method} ${request.url}`);
 		// --- Pre-flight Checks ---
-
-		// 1. Critical configuration check: Ensure custom domain is set.
-        const previewDomain = getPreviewDomain(env);
-		if (!previewDomain || previewDomain.trim() === '') {
-			logger.error('FATAL: env.CUSTOM_DOMAIN is not configured in wrangler.toml or the Cloudflare dashboard.');
-			return new Response('Server configuration error: Application domain is not set.', { status: 500 });
-		}
-
 		const url = new URL(request.url);
 		const { hostname, pathname } = url;
+		const configuredMainDomain = (env.CUSTOM_DOMAIN || '').trim();
+		const configuredPreviewDomain = (getPreviewDomain(env) || '').trim();
+		// Fallback to current host so API/auth endpoints remain usable even when
+		// CUSTOM_DOMAIN is missing or not injected in a deployment environment.
+		const mainDomain = configuredMainDomain || hostname;
+		const previewDomain = configuredPreviewDomain || configuredMainDomain;
 
 		// 2. Security: Immediately reject any requests made via an IP address.
 		const ipRegex = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
@@ -163,9 +161,9 @@ const worker = {
 
 		// Normalize hostnames for both local development (localhost) and production.
 		const isMainDomainRequest =
-			hostname === env.CUSTOM_DOMAIN || hostname === 'localhost';
+			hostname === mainDomain || hostname === 'localhost';
 		const isSubdomainRequest =
-			hostname.endsWith(`.${previewDomain}`) ||
+			(Boolean(previewDomain) && hostname.endsWith(`.${previewDomain}`)) ||
 			(hostname.endsWith('.localhost') && hostname !== 'localhost');
 
 		// Route 1: Main Platform Request (e.g., build.cloudflare.dev or localhost)

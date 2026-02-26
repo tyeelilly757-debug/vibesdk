@@ -15,7 +15,6 @@ import { ApiResponse, ControllerResponse } from '../types';
 import { RouteContext } from '../../types/route-context';
 import { AppService, ModelConfigService } from '../../../database';
 import { ModelConfig, credentialsToRuntimeOverrides } from '../../../agents/inferutils/config.types';
-import { RateLimitService } from '../../../services/rate-limit/rateLimits';
 import { validateWebSocketOrigin } from '../../../middleware/security/websocket';
 import { createLogger } from '../../../logger';
 import { getPreviewDomain } from 'worker/utils/urls';
@@ -56,7 +55,9 @@ export class CodingAgentController extends BaseController {
             this.logger.info('Starting code generation process');
 
             const url = new URL(request.url);
-            const hostname = url.hostname === 'localhost' ? `localhost:${url.port}`: getPreviewDomain(env);
+            const hostname = url.hostname === 'localhost'
+                ? `localhost:${url.port}`
+                : (getPreviewDomain(env) || url.host);
             // Parse the query from the request body
             let body: CodeGenArgs;
             try {
@@ -92,16 +93,10 @@ export class CodingAgentController extends BaseController {
             const writer = writable.getWriter();
             // Check if user is authenticated (required for app creation)
             const user = context.user!;
-            try {
-                await RateLimitService.enforceAppCreationRateLimit(env, context.config.security.rateLimit, user, request);
-            } catch (error) {
-                if (error instanceof Error) {
-                    return CodingAgentController.createErrorResponse(error, 429);
-                } else {
-                    this.logger.error('Unknown error in enforceAppCreationRateLimit', error);
-                    return CodingAgentController.createErrorResponse(JSON.stringify(error), 429);
-                }
-            }
+            this.logger.info('App creation rate limit disabled for /api/agent', {
+                userId: user.id,
+                sessionId: context.sessionId,
+            });
 
             const agentId = generateId();
             const modelConfigService = new ModelConfigService(env);
@@ -203,7 +198,8 @@ export class CodingAgentController extends BaseController {
             });
         } catch (error) {
             this.logger.error('Error starting code generation', error);
-            return CodingAgentController.handleError(error, 'start code generation');
+            const details = error instanceof Error ? error.message : String(error);
+            return CodingAgentController.createErrorResponse(`Failed to start code generation: ${details}`, 500);
         }
     }
 
