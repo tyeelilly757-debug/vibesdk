@@ -4,19 +4,25 @@ import path from 'node:path';
 const projectRoot = process.cwd();
 const sourceWranglerPath = path.join(projectRoot, 'wrangler.jsonc');
 const deployConfigPath = path.join(projectRoot, '.wrangler', 'deploy', 'config.json');
+const CANONICAL_WORKER_NAME = 'vibesdk';
 
 function getExpectedWorkerName() {
 	try {
 		const sourceConfigRaw = fs.readFileSync(sourceWranglerPath, 'utf8');
 		const match = sourceConfigRaw.match(/"name"\s*:\s*"([^"]+)"/);
 		if (match?.[1]) {
-			return match[1];
+			if (match[1] !== CANONICAL_WORKER_NAME) {
+				console.log(
+					`[force-safe-container-limits] Source worker name "${match[1]}" differs from canonical "${CANONICAL_WORKER_NAME}", forcing canonical name`,
+				);
+			}
+			return CANONICAL_WORKER_NAME;
 		}
 	} catch {
 		// Fall back to default when source config is not readable.
 	}
 
-	return 'vibesdk';
+	return CANONICAL_WORKER_NAME;
 }
 
 function getGeneratedWranglerPaths() {
