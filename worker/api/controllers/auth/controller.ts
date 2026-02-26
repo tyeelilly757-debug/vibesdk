@@ -56,6 +56,16 @@ export class AuthController extends BaseController {
 
         return allowedList.includes(requested);
     }
+
+    private static asSecurityLikeError(error: unknown): { message: string; statusCode: number } | null {
+        if (!error || typeof error !== 'object') return null;
+        const maybeMessage = (error as { message?: unknown }).message;
+        const maybeStatus = (error as { statusCode?: unknown }).statusCode;
+        if (typeof maybeMessage === 'string' && typeof maybeStatus === 'number') {
+            return { message: maybeMessage, statusCode: maybeStatus };
+        }
+        return null;
+    }
     
     /**
      * Register a new user
@@ -110,6 +120,10 @@ export class AuthController extends BaseController {
             }
             if (error instanceof SecurityError) {
                 return AuthController.createErrorResponse(error.message, error.statusCode);
+            }
+            const securityLikeError = AuthController.asSecurityLikeError(error);
+            if (securityLikeError) {
+                return AuthController.createErrorResponse(securityLikeError.message, securityLikeError.statusCode);
             }
             
             return AuthController.handleError(error, 'register user');
@@ -169,6 +183,10 @@ export class AuthController extends BaseController {
             }
             if (error instanceof SecurityError) {
                 return AuthController.createErrorResponse(error.message, error.statusCode);
+            }
+            const securityLikeError = AuthController.asSecurityLikeError(error);
+            if (securityLikeError) {
+                return AuthController.createErrorResponse(securityLikeError.message, securityLikeError.statusCode);
             }
             
             return AuthController.handleError(error, 'login user');
