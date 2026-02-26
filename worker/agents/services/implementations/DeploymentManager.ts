@@ -216,10 +216,12 @@ export class DeploymentManager extends BaseAgentService<BaseProjectState> implem
      * Run static analysis (lint + typecheck) on code
      */
     async runStaticAnalysis(files?: string[]): Promise<StaticAnalysisResponse> {
-        const { sandboxInstanceId } = this.getState();
+        let { sandboxInstanceId } = this.getState();
 
         if (!sandboxInstanceId) {
-            throw new Error('No sandbox instance available for static analysis');
+            this.getLog().info('No sandbox instance available for static analysis, creating one now');
+            const ensured = await this.ensureInstance(false);
+            sandboxInstanceId = ensured.sandboxInstanceId;
         }
 
         const logger = this.getLog();

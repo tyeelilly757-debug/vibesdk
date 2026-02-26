@@ -201,7 +201,14 @@ export class PhasicCodingBehavior extends BaseCodingBehavior<PhasicState> implem
     }
 
     getOperationOptions(): OperationOptions<PhasicGenerationContext> {
-        const context = GenerationContext.from(this.state, this.getTemplateDetails(), this.logger);
+        const normalizedState: PhasicState = {
+            ...(this.state as PhasicState),
+            behaviorType: 'phasic',
+            generatedPhases: Array.isArray((this.state as Partial<PhasicState>).generatedPhases)
+                ? (this.state as PhasicState).generatedPhases
+                : [],
+        };
+        const context = GenerationContext.from(normalizedState, this.getTemplateDetails(), this.logger);
         if (!GenerationContext.isPhasic(context)) {
             throw new Error('Expected PhasicGenerationContext');
         }
@@ -213,6 +220,12 @@ export class PhasicCodingBehavior extends BaseCodingBehavior<PhasicState> implem
             inferenceContext: this.getInferenceContext(),
             agent: this
         };
+    }
+
+    private isDevAnonymousMode(): boolean {
+        const bypassEnabled =
+            ((this.env as unknown as { ALLOW_DEV_ANON_AGENT_ACCESS?: string }).ALLOW_DEV_ANON_AGENT_ACCESS ?? 'false').toLowerCase() === 'true';
+        return bypassEnabled && this.state.metadata.userId === 'dev-anon-user';
     }
 
     private createNewIncompletePhase(phaseConcept: PhaseConceptType) {
@@ -521,19 +534,21 @@ export class PhasicCodingBehavior extends BaseCodingBehavior<PhasicState> implem
             },
             this.getOperationOptions()
         )
+        const generatedFiles = Array.isArray(result.files) ? result.files : [];
+        const installCommands = Array.isArray(result.installCommands) ? result.installCommands : [];
         // Execute install commands if any
-        if (result.installCommands && result.installCommands.length > 0) {
-            this.executeCommands(result.installCommands);
+        if (installCommands.length > 0) {
+            this.executeCommands(installCommands);
         }
 
         // Execute delete commands if any
-        const filesToDelete = result.files.filter(f => f.changes?.toLowerCase().trim() === 'delete');
+        const filesToDelete = generatedFiles.filter(f => f.changes?.toLowerCase().trim() === 'delete');
         if (filesToDelete.length > 0) {
             this.logger.info(`Deleting ${filesToDelete.length} files: ${filesToDelete.map(f => f.path).join(", ")}`);
             this.deleteFiles(filesToDelete.map(f => f.path));
         }
         
-        if (result.files.length === 0) {
+        if (generatedFiles.length === 0) {
             this.logger.info("No files generated for next phase");
             // Notify phase generation complete
             this.broadcast(WebSocketMessageResponses.PHASE_GENERATED, {
@@ -542,15 +557,25 @@ export class PhasicCodingBehavior extends BaseCodingBehavior<PhasicState> implem
             });
             return undefined;
         }
-        
-        this.createNewIncompletePhase(result);
+
+        this.createNewIncompletePhase({
+            ...result,
+            files: generatedFiles,
+        });
         // Notify phase generation complete
         this.broadcast(WebSocketMessageResponses.PHASE_GENERATED, {
             message: `Generated next phase: ${result.name}`,
-            phase: result
+            phase: {
+                ...result,
+                files: generatedFiles,
+            }
         });
 
-        return result;
+        return {
+            ...result,
+            files: generatedFiles,
+            installCommands,
+        };
     }
 
     /**
@@ -643,7 +668,7 @@ export class PhasicCodingBehavior extends BaseCodingBehavior<PhasicState> implem
             await this.executeCommands(result.commands, false);
         }
 
-        if (safeFiles.length > 0) {
+        if (safeFiles.length > 0 && !this.isDevAnonymousMode()) {
             await this.deployToSandbox(safeFiles, false, phase.name, true);
             if (postPhaseFixing) {
                 await this.applyDeterministicCodeFixes();
@@ -651,6 +676,8 @@ export class PhasicCodingBehavior extends BaseCodingBehavior<PhasicState> implem
                     await this.applyFastSmartCodeFixes();
                 }
             }
+        } else if (safeFiles.length > 0) {
+            this.logger.info('Skipping sandbox deploy/fix passes in dev anonymous mode');
         }
 
         // Validation complete

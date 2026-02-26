@@ -353,9 +353,11 @@ export class CodeGeneratorAgent extends Agent<Env, AgentState> implements AgentI
         this.logger().info(`Saving agent ${this.getAgentId()} to database`);
         // Save the app to database (authenticated users only)
         const appService = new AppService(this.env);
+        const isDevAnonymousUser = this.state.metadata.userId === 'dev-anon-user';
         await appService.createApp({
             id: this.state.metadata.agentId,
-            userId: this.state.metadata.userId,
+            // Dev anonymous mode stores apps without ownership linkage.
+            userId: isDevAnonymousUser ? null : this.state.metadata.userId,
             sessionToken: null,
             title: this.state.blueprint.title || this.state.query.substring(0, 100),
             description: this.state.blueprint.description,

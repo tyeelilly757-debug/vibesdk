@@ -5,7 +5,6 @@ import { useAuth } from '@/contexts/auth-context';
 import { ProjectModeSelector, type ProjectModeOption } from '../components/project-mode-selector';
 import { MAX_AGENT_QUERY_LENGTH, SUPPORTED_IMAGE_MIME_TYPES, type ProjectType } from '@/api-types';
 import { useFeature } from '@/features';
-import { useAuthGuard } from '../hooks/useAuthGuard';
 import { usePaginatedApps } from '@/hooks/use-paginated-apps';
 import { AnimatePresence, LayoutGroup, motion } from 'framer-motion';
 import { AppCard } from '@/components/shared/AppCard';
@@ -18,7 +17,6 @@ import { toast } from 'sonner';
 
 export default function Home() {
 	const navigate = useNavigate();
-	const { requireAuth } = useAuthGuard();
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
 	const [projectMode, setProjectMode] = useState<ProjectType>('app');
 	const [query, setQuery] = useState('');
@@ -101,18 +99,6 @@ export default function Home() {
 		// Encode images as JSON if present
 		const imageParam = images.length > 0 ? `&images=${encodeURIComponent(JSON.stringify(images))}` : '';
 		const intendedUrl = `/chat/new?query=${encodedQuery}&projectType=${encodedMode}${imageParam}`;
-
-		if (
-			!requireAuth({
-				requireFullAuth: true,
-				actionContext: 'to create applications',
-				intendedUrl: intendedUrl,
-			})
-		) {
-			return;
-		}
-
-		// User is already authenticated, navigate immediately
 		navigate(intendedUrl);
 		// Clear images after navigation
 		clearImages();
