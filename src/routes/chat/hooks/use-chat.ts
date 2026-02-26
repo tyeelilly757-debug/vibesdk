@@ -350,12 +350,12 @@ export function useChat({
 				});
 
 				ws.addEventListener('error', (error) => {
-					clearTimeout(connectionTimeout);
 					// Only handle error for the latest attempt and when we should reconnect
 					if (myAttemptId !== connectAttemptIdRef.current) return;
 					if (!shouldReconnectRef.current) return;
 					logger.error('❌ WebSocket error:', error);
-					handleConnectionFailureRef.current?.(wsUrl, disableGenerate, 'WebSocket error');
+					// Let close/timeout drive retries to avoid duplicate retry scheduling
+					// from both "error" and "close" for the same failed attempt.
 				});
 
 				ws.addEventListener('close', (event) => {
@@ -386,11 +386,15 @@ export function useChat({
 	// Handle connection failures with exponential backoff retry
 	const handleConnectionFailure = useCallback(
 		(wsUrl: string, disableGenerate: boolean, reason: string) => {
+			if (!shouldReconnectRef.current) return;
 			connectionStatus.current = 'failed';
 			
 			if (retryCount.current >= maxRetries) {
 				logger.error(`💥 WebSocket connection failed permanently after ${maxRetries + 1} attempts`);
 				sendMessage(createAIMessage('websocket_failed', `🚨 Connection failed permanently after ${maxRetries + 1} attempts.\n\n❌ Reason: ${reason}\n\n🔄 Please refresh the page to try again.`));
+				shouldReconnectRef.current = false;
+				retryTimeouts.current.forEach(clearTimeout);
+				retryTimeouts.current = [];
 				
 				// Debug logging for permanent failure
 				onDebugMessage?.('error',
@@ -412,8 +416,30 @@ export function useChat({
 			
 			sendMessage(createAIMessage('websocket_retrying', `🔄 Connection failed. Retrying in ${Math.ceil(actualDelay / 1000)} seconds... (attempt ${retryCount.current + 1}/${maxRetries + 1})\n\n❌ Reason: ${reason}`, true));
 
+			// Keep only one scheduled retry to avoid reconnect storms.
+			retryTimeouts.current.forEach(clearTimeout);
+			retryTimeouts.current = [];
+
 			const timeoutId = setTimeout(() => {
-				connectWithRetryRef.current?.(wsUrl, { disableGenerate, isRetry: true });
+				(async () => {
+					let nextWsUrl = wsUrl;
+					const reconnectAgentId =
+						chatId || (urlChatId && urlChatId !== 'new' ? urlChatId : undefined);
+
+					// Refresh connection info for each retry to avoid stale/expired WS URLs.
+					if (reconnectAgentId) {
+						try {
+							const reconnectResponse = await apiClient.connectToAgent(reconnectAgentId);
+							if (reconnectResponse.success && reconnectResponse.data?.websocketUrl) {
+								nextWsUrl = reconnectResponse.data.websocketUrl;
+							}
+						} catch (reconnectError) {
+							logger.warn('Failed to refresh WebSocket URL for retry, using previous URL', reconnectError);
+						}
+					}
+
+					connectWithRetryRef.current?.(nextWsUrl, { disableGenerate, isRetry: true });
+				})();
 			}, actualDelay);
 			
 			retryTimeouts.current.push(timeoutId);
@@ -425,7 +451,7 @@ export function useChat({
 				'WebSocket Resilience'
 			);
 		},
-		[maxRetries, onDebugMessage, sendMessage],
+		[maxRetries, onDebugMessage, sendMessage, chatId, urlChatId],
 	);
 
 	useEffect(() => {
