@@ -26,6 +26,7 @@ import { authMiddleware } from '../../../middleware/auth/auth';
 import { CsrfService } from '../../../services/csrf/CsrfService';
 import { BaseController } from '../baseController';
 import { createLogger } from '../../../logger';
+import { ZodError } from 'zod';
 /**
  * Authentication Controller
  */
@@ -103,6 +104,10 @@ export class AuthController extends BaseController {
             
             return response;
         } catch (error) {
+            if (error instanceof ZodError) {
+                const message = error.issues.map((issue) => issue.message).join(', ');
+                return AuthController.createErrorResponse(message || 'Invalid registration input', 400);
+            }
             if (error instanceof SecurityError) {
                 return AuthController.createErrorResponse(error.message, error.statusCode);
             }
@@ -158,6 +163,10 @@ export class AuthController extends BaseController {
             
             return response;
         } catch (error) {
+            if (error instanceof ZodError) {
+                const message = error.issues.map((issue) => issue.message).join(', ');
+                return AuthController.createErrorResponse(message || 'Invalid login input', 400);
+            }
             if (error instanceof SecurityError) {
                 return AuthController.createErrorResponse(error.message, error.statusCode);
             }
