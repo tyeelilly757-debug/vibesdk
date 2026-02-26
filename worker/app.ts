@@ -34,10 +34,23 @@ export function createApp(env: Env): Hono<AppEnv> {
     // CSRF protection using double-submit cookie pattern with proper GET handling
     app.use('*', async (c, next) => {
         const method = c.req.method.toUpperCase();
+        const { pathname } = new URL(c.req.url);
         
         // Skip for WebSocket upgrades
         const upgradeHeader = c.req.header('upgrade');
         if (upgradeHeader?.toLowerCase() === 'websocket') {
+            return next();
+        }
+
+        // Public auth entrypoints use explicit credentials and should not require
+        // a CSRF token/cookie pair before a session exists.
+        const isPublicAuthEntry =
+            pathname === '/api/auth/register' ||
+            pathname === '/api/auth/login' ||
+            pathname === '/api/auth/verify-email' ||
+            pathname === '/api/auth/resend-verification' ||
+            pathname === '/api/auth/exchange-api-key';
+        if (isPublicAuthEntry) {
             return next();
         }
         
