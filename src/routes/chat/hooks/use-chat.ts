@@ -85,7 +85,12 @@ export function useChat({
 		) => void) | null
 	>(null);
 	const handleConnectionFailureRef = useRef<
-		((wsUrl: string, disableGenerate: boolean, reason: string) => void) | null
+		((
+			wsUrl: string,
+			disableGenerate: boolean,
+			reason: string,
+			options?: { countTowardsRetry?: boolean; retryDelayMs?: number },
+		) => void) | null
 	>(null);
 	const [chatId, setChatId] = useState<string>();
 	const [messages, setMessages] = useState<ChatMessage[]>([
@@ -287,6 +292,15 @@ export function useChat({
 				logger.debug('🔗 Attempting WebSocket connection to:', wsUrl);
 				const ws = new WebSocket(wsUrl);
 				setWebsocket(ws);
+				let failureHandled = false;
+				const failOnce = (
+					reason: string,
+					options?: { countTowardsRetry?: boolean; retryDelayMs?: number },
+				) => {
+					if (failureHandled) return;
+					failureHandled = true;
+					handleConnectionFailureRef.current?.(wsUrl, disableGenerate, reason, options);
+				};
 
 				// Mark this attempt id
 				const myAttemptId = ++connectAttemptIdRef.current;
@@ -297,8 +311,8 @@ export function useChat({
 					if (myAttemptId !== connectAttemptIdRef.current) return;
 					if (ws.readyState === WebSocket.CONNECTING) {
 						logger.warn('⏰ WebSocket connection timeout');
-						ws.close();
-						handleConnectionFailureRef.current?.(wsUrl, disableGenerate, 'Connection timeout');
+						// Let close listener trigger retry logic once.
+						ws.close(4000, 'connection_timeout');
 					}
 				}, 30000);
 
@@ -316,6 +330,7 @@ export function useChat({
 					
 					// Reset retry count on successful connection
 					retryCount.current = 0;
+					failureHandled = false;
 					
 					// Clear any pending retry timeouts
 					retryTimeouts.current.forEach(clearTimeout);
@@ -367,8 +382,18 @@ export function useChat({
 					// Only handle close for the latest attempt and when we should reconnect
 					if (myAttemptId !== connectAttemptIdRef.current) return;
 					if (!shouldReconnectRef.current) return;
-					// Retry on any close while mounted (including 1000) to improve resilience
-					handleConnectionFailureRef.current?.(wsUrl, disableGenerate, `Connection closed (code: ${event.code})`);
+
+					// Normal closures happen during transient backend restarts/rollouts.
+					// Reconnect without burning retry budget to avoid false permanent failures.
+					if (event.code === 1000) {
+						failOnce(`Connection closed (code: ${event.code})`, {
+							countTowardsRetry: false,
+							retryDelayMs: 1000,
+						});
+						return;
+					}
+
+					failOnce(`Connection closed (code: ${event.code})`);
 				});
 
 				return function disconnect() {
@@ -385,10 +410,17 @@ export function useChat({
 
 	// Handle connection failures with exponential backoff retry
 	const handleConnectionFailure = useCallback(
-		(wsUrl: string, disableGenerate: boolean, reason: string) => {
+		(
+			wsUrl: string,
+			disableGenerate: boolean,
+			reason: string,
+			options?: { countTowardsRetry?: boolean; retryDelayMs?: number },
+		) => {
+			if (!shouldReconnectRef.current) return;
 			connectionStatus.current = 'failed';
+			const countTowardsRetry = options?.countTowardsRetry ?? true;
 			
-			if (retryCount.current >= maxRetries) {
+			if (countTowardsRetry && retryCount.current >= maxRetries) {
 				logger.error(`💥 WebSocket connection failed permanently after ${maxRetries + 1} attempts`);
 				sendMessage(createAIMessage('websocket_failed', `🚨 Connection failed permanently after ${maxRetries + 1} attempts.\n\n❌ Reason: ${reason}\n\n🔄 Please refresh the page to try again.`));
 				
@@ -401,10 +433,15 @@ export function useChat({
 				return;
 			}
 
-			retryCount.current++;
+			if (countTowardsRetry) {
+				retryCount.current++;
+			}
 			
 			// Exponential backoff: 2^attempt * 1000ms (1s, 2s, 4s, 8s, 16s)
-			const retryDelay = Math.pow(2, retryCount.current) * 1000;
+			const retryDelay =
+				typeof options?.retryDelayMs === 'number'
+					? options.retryDelayMs
+					: Math.pow(2, retryCount.current) * 1000;
 			const maxDelay = 30000; // Cap at 30 seconds
 			const actualDelay = Math.min(retryDelay, maxDelay);
 
