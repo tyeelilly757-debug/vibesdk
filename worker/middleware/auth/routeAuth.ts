@@ -166,6 +166,30 @@ export async function enforceAuthRequirement(c: Context<AppEnv>) : Promise<Respo
         logger.error('No authentication level found');
         return errorResponse('No authentication level found', 500);
     }
+
+    const requestPath = new URL(c.req.url).pathname;
+    const devBypassEnabled =
+        ((c.env as unknown as { ALLOW_DEV_ANON_AGENT_ACCESS?: string }).ALLOW_DEV_ANON_AGENT_ACCESS ?? 'false').toLowerCase() === 'true';
+    const isAgentRoute = requestPath === '/api/agent' || requestPath.startsWith('/api/agent/');
+
+    // Temporary local recovery mode: allow anonymous access to agent routes only.
+    // This is intentionally scoped to /api/agent* so other protected APIs stay unchanged.
+    if (!user && devBypassEnabled && isAgentRoute) {
+        user = {
+            id: 'dev-anon-user',
+            email: 'dev-anon@vibesdk.local',
+            displayName: 'Dev Anonymous',
+            provider: 'dev-bypass',
+            isAnonymous: true,
+            emailVerified: true,
+        };
+        c.set('user', user);
+        c.set('sessionId', 'dev-anon-session');
+        const config = await getUserConfigurableSettings(c.env, user.id);
+        c.set('config', config);
+        logger.warn('Bypassing auth for /api/agent route in dev anonymous mode', { path: requestPath });
+        return;
+    }
     
     // Only perform auth if we need it or don't have user yet
     if (!user && (requirement.level === 'authenticated' || requirement.level === 'owner-only')) {

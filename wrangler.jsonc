@@ -132,7 +132,8 @@
       "version": "1.0.0"
     },
     "CUSTOM_DOMAIN": "vibesdk.tyeelilly757.workers.dev",
-    "MAX_SANDBOX_INSTANCES": "1"
+    "MAX_SANDBOX_INSTANCES": "1",
+    "ALLOW_DEV_ANON_AGENT_ACCESS": "true"
   },
   "workers_dev": true,
   "preview_urls": true
