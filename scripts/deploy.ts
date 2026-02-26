@@ -1292,11 +1292,11 @@ class CloudflareDeploymentManager {
 	 * Updates container instance types based on SANDBOX_INSTANCE_TYPE variable
 	 */
 	private updateContainerInstanceTypes(): void {
-		// Environment variable takes priority over wrangler.jsonc vars
+		// Wrangler config takes priority to avoid CI env drift overriding checked-in sizing.
 		const sandboxInstanceType = 
-			process.env.SANDBOX_INSTANCE_TYPE || 
 			this.config.vars?.SANDBOX_INSTANCE_TYPE || 
-			'standard-3';
+			process.env.SANDBOX_INSTANCE_TYPE ||
+			'standard-2';
 
 		console.log(
 			`🔧 Configuring container instance types: ${sandboxInstanceType}`,
