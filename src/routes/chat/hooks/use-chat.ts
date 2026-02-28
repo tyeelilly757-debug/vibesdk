@@ -23,6 +23,7 @@ import { logger } from '@/utils/logger';
 import { mergeFiles } from '@/utils/file-helpers';
 import { apiClient } from '@/lib/api-client';
 import { appEvents } from '@/lib/app-events';
+import { getPreviewUrl } from '@/lib/utils';
 import { createWebSocketMessageHandler, type HandleMessageDeps } from '../utils/handle-websocket-message';
 import { isConversationalMessage, addOrUpdateMessage, createUserMessage, handleRateLimitError, createAIMessage, type ChatMessage } from '../utils/message-helpers';
 import { sendWebSocketMessage } from '../utils/websocket-helpers';
@@ -175,6 +176,29 @@ export function useChat({
 		}
 	}, []);
 
+	const requestPreviewForAgent = useCallback(async (agentId: string) => {
+		for (let attempt = 0; attempt < 4; attempt++) {
+			try {
+				const preview = await apiClient.deployPreview(agentId);
+				if (preview.success && preview.data) {
+					let nextPreviewUrl = getPreviewUrl(
+						preview.data.previewURL,
+						preview.data.tunnelURL,
+					);
+					if (nextPreviewUrl) {
+						const sep = nextPreviewUrl.includes('?') ? '&' : '?';
+						nextPreviewUrl = `${nextPreviewUrl}${sep}t=${Date.now()}`;
+						setPreviewUrl(nextPreviewUrl);
+						return;
+					}
+				}
+			} catch (error) {
+				logger.warn('Preview request attempt failed', { attempt: attempt + 1, error });
+			}
+			await new Promise((resolve) => setTimeout(resolve, 1200));
+		}
+	}, []);
+
 
 	const sendMessage = useCallback((message: ChatMessage) => {
 		// Only add conversational messages to the chat UI
@@ -238,6 +262,7 @@ export function useChat({
 			isGenerating,
 			urlChatId,
 			behaviorType,
+			chatId,
 			// Functions
 			updateStage,
 			sendMessage,
@@ -263,6 +288,7 @@ export function useChat({
 			isGenerating,
 			urlChatId,
 			behaviorType,
+			chatId,
 			updateStage,
 			sendMessage,
 			loadBootstrapFiles,
@@ -347,11 +373,15 @@ export function useChat({
 					// Always request conversation state explicitly (running/full history)
 					sendWebSocketMessage(ws, 'get_conversation_state');
 
-					// Request file generation for new chats only
-					if (!disableGenerate && urlChatId === 'new') {
+					// Start generation whenever this connection isn't marked as resume-only.
+					// This avoids missing generation when route params are stale/non-"new".
+					if (!disableGenerate) {
 						logger.debug('🔄 Starting code generation for new chat');
 						setIsGenerating(true);
 						sendWebSocketMessage(ws, 'generate_all');
+						// Trigger early preview provisioning so users get a visible app surface
+						// while generation continues in the background.
+						sendWebSocketMessage(ws, 'preview');
 					}
 				});
 
@@ -414,7 +444,7 @@ export function useChat({
 				handleConnectionFailureRef.current?.(wsUrl, disableGenerate, 'Connection setup failed');
 			}
 		},
-		[maxRetries, handleWebSocketMessage, urlChatId],
+		[maxRetries, handleWebSocketMessage],
 	);
 
 	// Handle connection failures with exponential backoff retry
@@ -626,6 +656,7 @@ export function useChat({
 					logger.debug('connecting to ws with created id');
 					connectWithRetry(result.websocketUrl);
 					setChatId(result.agentId); // This comes from the server response
+					void requestPreviewForAgent(result.agentId);
 					
 					// Emit app-created event for sidebar updates
 					appEvents.emitAppCreated(result.agentId, {
@@ -683,7 +714,25 @@ export function useChat({
 						),
 					);
 					setTimeout(() => {
-						window.location.replace('/chat/new');
+						window.location.replace('/');
+					}, 250);
+					return;
+				}
+
+				const isStaleChatError =
+					error instanceof Error &&
+					/app not found|agent instance not found|failed to connect to agent/i.test(
+						error.message,
+					);
+				if (isStaleChatError && urlChatId && urlChatId !== 'new') {
+					sendMessage(
+						createAIMessage(
+							'chat_not_found_reset',
+							'This chat link is no longer available. Redirecting you to a new chat...',
+						),
+					);
+					setTimeout(() => {
+						window.location.replace('/');
 					}, 250);
 					return;
 				}
@@ -701,6 +750,7 @@ export function useChat({
 		loadBootstrapFiles,
 		onDebugMessage,
 		sendMessage,
+		requestPreviewForAgent,
 		updateStage,
 		urlChatId,
 		userImages,

@@ -31,6 +31,7 @@ import { SecretsClient, type UserSecretsStoreStub } from '../../services/secrets
 import { StateMigration } from './stateMigration';
 import { PendingWsTicket, TicketConsumptionResult } from '../../types/auth-types';
 import { WsTicketManager } from '../../utils/wsTicketManager';
+import { isGenericFallbackPreviewHtml, buildPromptBasedPreviewHtml } from '../../utils/previewFallback';
 
 const DEFAULT_CONVERSATION_SESSION_ID = 'default';
 
@@ -255,6 +256,30 @@ export class CodeGeneratorAgent extends Agent<Env, AgentState> implements AgentI
     getAgentId() {
         return this.state.metadata.agentId;
     }
+
+    /**
+     * Ensure agent metadata has a stable agentId for preview URL generation.
+     * This helps recover after DO resets where metadata can be temporarily missing.
+     */
+    async ensureAgentId(agentId: string): Promise<void> {
+        const current = this.state.metadata?.agentId;
+        if (current && current !== 'agent') return;
+
+        const nextState = {
+            ...this.state,
+            metadata: {
+                ...this.state.metadata,
+                agentId,
+                userId: this.state.metadata?.userId || 'dev-anon-user',
+            },
+        };
+        this.setState(nextState);
+        this._logger = this.initLogger(
+            agentId,
+            nextState.metadata.userId,
+            nextState.sessionId
+        );
+    }
     
     getWebSockets(): WebSocket[] {
         return this.ctx.getWebSockets();
@@ -331,6 +356,43 @@ export class CodeGeneratorAgent extends Agent<Env, AgentState> implements AgentI
         clearLogs: boolean = false
     ): Promise<PreviewType | null> {
         return this.behavior.deployToSandbox(files, redeploy, commitMessage, clearLogs);
+    }
+
+    getBrowserPreviewURL(): string {
+        return this.behavior.getBrowserPreviewURL();
+    }
+
+    /**
+     * Merge original query with recent user messages so follow-ups like
+     * "put a dog image in there" are reflected in the prompt-based fallback preview.
+     */
+    private getMergedQueryForPreview(): string {
+        const base = (this.state.query || '').trim();
+        try {
+            const conv = this.getConversationState();
+            const userMessages = (conv.runningHistory || [])
+                .filter((m) => m.role === 'user')
+                .slice(-6)
+                .map((m) => {
+                    const c = m.content;
+                    if (typeof c === 'string') return c;
+                    if (Array.isArray(c)) {
+                        return c
+                            .filter((x): x is { type: 'text'; text: string } => x && typeof x === 'object' && (x as { type?: string }).type === 'text' && typeof (x as { text?: string }).text === 'string')
+                            .map((x) => x.text)
+                            .join(' ');
+                    }
+                    return '';
+                })
+                .filter(Boolean)
+                .join(' ');
+            if (userMessages) {
+                return [base, userMessages].filter(Boolean).join(' ').trim() || base;
+            }
+        } catch (_e) {
+            // Fallback to base query on any error
+        }
+        return base;
     }
 
     deployToCloudflare(target?: DeploymentTarget): Promise<{ deploymentUrl?: string; workersUrl?: string } | null> {
@@ -662,36 +724,48 @@ export class CodeGeneratorAgent extends Agent<Env, AgentState> implements AgentI
             });
         }
 
-        // Extract token from hostname
-        // Pattern: b-{agentid}-{token}.{previewDomain}/{filepath}
-        // Token is always 16 characters after the LAST hyphen (after removing 'b-' prefix)
+        // Support two URL formats:
+        // 1) Subdomain: b-{agentid}-{token}.{previewDomain}/{filepath}
+        // 2) Path: /b-preview/{agentId}/{token}/{filepath}
         const subdomain = url.hostname.split('.')[0];
+        let providedToken = '';
+        let filePath = 'public/index.html';
 
-        if (!subdomain.startsWith('b-')) {
-            this.logger().warn('[BROWSER SERVING] Invalid hostname pattern - missing b- prefix', { hostname: url.hostname });
+        if (subdomain.startsWith('b-')) {
+            const withoutPrefix = subdomain.substring(2); // Remove 'b-'
+            const lastHyphenIndex = withoutPrefix.lastIndexOf('-');
+
+            if (lastHyphenIndex === -1) {
+                this.logger().warn('[BROWSER SERVING] Invalid hostname pattern - no hyphen after prefix', { hostname: url.hostname });
+                return new Response('Invalid request', {
+                    status: 400,
+                    headers: { 'Content-Type': 'text/plain' }
+                });
+            }
+
+            providedToken = withoutPrefix.substring(lastHyphenIndex + 1);
+            filePath = url.pathname === '/' || url.pathname === ''
+                ? 'public/index.html'
+                : url.pathname.replace(/^\//, '');
+        } else if (url.pathname.startsWith('/b-preview/')) {
+            const parts = url.pathname.split('/').filter(Boolean); // ["b-preview", agentId, token, ...path]
+            if (parts.length < 3) {
+                this.logger().warn('[BROWSER SERVING] Invalid path preview format', { pathname: url.pathname });
+                return new Response('Invalid request', {
+                    status: 400,
+                    headers: { 'Content-Type': 'text/plain' }
+                });
+            }
+            providedToken = parts[2];
+            const nestedPath = parts.slice(3).join('/');
+            filePath = nestedPath ? nestedPath : 'public/index.html';
+        } else {
+            this.logger().warn('[BROWSER SERVING] Unsupported preview URL format', { hostname: url.hostname, pathname: url.pathname });
             return new Response('Invalid request', {
                 status: 400,
                 headers: { 'Content-Type': 'text/plain' }
             });
         }
-
-        const withoutPrefix = subdomain.substring(2); // Remove 'b-'
-        const lastHyphenIndex = withoutPrefix.lastIndexOf('-');
-
-        if (lastHyphenIndex === -1) {
-            this.logger().warn('[BROWSER SERVING] Invalid hostname pattern - no hyphen after prefix', { hostname: url.hostname });
-            return new Response('Invalid request', {
-                status: 400,
-                headers: { 'Content-Type': 'text/plain' }
-            });
-        }
-
-        const providedToken = withoutPrefix.substring(lastHyphenIndex + 1);
-
-        // Extract file path from pathname
-        const filePath = url.pathname === '/' || url.pathname === ''
-            ? 'public/index.html'
-            : url.pathname.replace(/^\//, ''); // Remove leading slash
 
         this.logger().info('[BROWSER SERVING] Extracted', { providedToken, filePath });
 
@@ -712,26 +786,173 @@ export class CodeGeneratorAgent extends Agent<Env, AgentState> implements AgentI
             });
         }
         const normalized = normalizePath(filePath);
-        let file = this.fileManager.getFile(normalized);
+        const lookupCandidates: string[] = [normalized];
+        if (!normalized.startsWith('public/')) {
+            lookupCandidates.push(`public/${normalized}`);
+        }
+        // Root document fallback: generated apps often put index.html at repo root.
+        if (normalized === 'public/index.html') {
+            lookupCandidates.push('index.html');
+        }
+        // SPA fallback for route paths without explicit extension.
+        if (!normalized.includes('.') && normalized !== 'index.html' && normalized !== 'public/index.html') {
+            lookupCandidates.push('index.html', 'public/index.html');
+        }
 
-        // Try with public/ prefix if not found
-        if (!file && !normalized.startsWith('public/')) {
-            file = this.fileManager.getFile(`public/${normalized}`);
+        let file;
+        let resolvedPath: string | null = null;
+        for (const candidate of lookupCandidates) {
+            const matched = this.fileManager.getFile(candidate);
+            if (matched) {
+                file = matched;
+                resolvedPath = candidate;
+                break;
+            }
+        }
+
+        const isFallbackScaffoldHtml = (candidatePath: string, candidateFile: { fileContents: string; filePurpose?: string }): boolean => {
+            if (!candidatePath.endsWith('index.html')) {
+                return false;
+            }
+            const purpose = (candidateFile.filePurpose || '').toLowerCase();
+            if (purpose.includes('fallback') || purpose.includes('emergency preview artifact')) {
+                return true;
+            }
+            const body = candidateFile.fileContents || '';
+            return (
+                body.includes('Your Website Is Live') ||
+                body.includes('VibeSDK Website Preview') ||
+                body.includes('Website Preview') ||
+                body.includes('A starter site is ready while model capacity recovers.')
+            );
+        };
+
+        // If root request resolved to scaffold fallback HTML, prefer a non-fallback
+        // generated index when available so users see the actual project.
+        const requestedRootLike =
+            normalized === 'index.html' ||
+            normalized === 'public/index.html' ||
+            !normalized.includes('.');
+        if (file && resolvedPath && requestedRootLike && isFallbackScaffoldHtml(resolvedPath, file)) {
+            const generatedPaths = this.fileManager.getGeneratedFilePaths();
+            const preferredHtmlPath =
+                generatedPaths.find((p) => p === 'index.html') ||
+                generatedPaths.find((p) => p.endsWith('/index.html') && p !== 'public/index.html') ||
+                generatedPaths.find((p) => p.endsWith('.html') && p !== 'public/index.html');
+
+            if (preferredHtmlPath) {
+                const preferredFile = this.fileManager.getFile(preferredHtmlPath);
+                if (preferredFile && !isFallbackScaffoldHtml(preferredHtmlPath, preferredFile)) {
+                    file = preferredFile;
+                    resolvedPath = preferredHtmlPath;
+                }
+            }
+        }
+
+        // Final HTML fallback: if root/SPA entry was requested but standard index paths
+        // don't exist, try to serve the best available HTML file from generated output.
+        if (!file) {
+            if (requestedRootLike) {
+                const generatedPaths = this.fileManager.getGeneratedFilePaths();
+                const htmlPath =
+                    generatedPaths.find(p => p === 'index.html') ||
+                    generatedPaths.find(p => p === 'public/index.html') ||
+                    generatedPaths.find(p => p.endsWith('/index.html')) ||
+                    generatedPaths.find(p => p.endsWith('.html'));
+
+                if (htmlPath) {
+                    const matched = this.fileManager.getFile(htmlPath);
+                    if (matched) {
+                        file = matched;
+                        resolvedPath = htmlPath;
+                    }
+                }
+            }
+        }
+
+        // If files still can't be resolved, try reloading template details (can be missing
+        // after DO resume) and retry lookup once.
+        if (!file) {
+            try {
+                await this.behavior.ensureTemplateDetails();
+            } catch (error) {
+                this.logger().warn('[BROWSER SERVING] ensureTemplateDetails failed', { error: String(error) });
+            }
+
+            for (const candidate of lookupCandidates) {
+                const matched = this.fileManager.getFile(candidate);
+                if (matched) {
+                    file = matched;
+                    resolvedPath = candidate;
+                    break;
+                }
+            }
+
+            if (!file) {
+                const generatedPaths = this.fileManager.getGeneratedFilePaths();
+                const htmlPath =
+                    generatedPaths.find(p => p === 'index.html') ||
+                    generatedPaths.find(p => p === 'public/index.html') ||
+                    generatedPaths.find(p => p.endsWith('/index.html')) ||
+                    generatedPaths.find(p => p.endsWith('.html'));
+                if (htmlPath) {
+                    const matched = this.fileManager.getFile(htmlPath);
+                    if (matched) {
+                        file = matched;
+                        resolvedPath = htmlPath;
+                    }
+                }
+            }
+        }
+
+        // Final fallback: read from live sandbox instance if available.
+        if (!file && this.state.sandboxInstanceId) {
+            const sandboxCandidates = Array.from(new Set([
+                ...lookupCandidates,
+                'index.html',
+                'public/index.html',
+            ]));
+            try {
+                const resp = await this.behavior.getSandboxServiceClient().getFiles(
+                    this.state.sandboxInstanceId,
+                    sandboxCandidates
+                );
+                if (resp.success && resp.files.length > 0) {
+                    const preferred =
+                        resp.files.find(f => f.filePath === normalized) ||
+                        resp.files.find(f => f.filePath === 'public/index.html') ||
+                        resp.files.find(f => f.filePath === 'index.html') ||
+                        resp.files[0];
+                    file = {
+                        filePath: preferred.filePath,
+                        fileContents: preferred.fileContents,
+                        filePurpose: 'sandbox-fallback',
+                    };
+                    resolvedPath = preferred.filePath;
+                }
+            } catch (error) {
+                this.logger().warn('[BROWSER SERVING] Sandbox fallback read failed', { error: String(error) });
+            }
         }
 
         if (!file) {
-            this.logger().warn('[BROWSER SERVING] File not found', { normalized });
-            return new Response('File not found', {
+            this.logger().warn('[BROWSER SERVING] Preview artifact missing', {
+                normalized,
+                lookupCandidates,
+                generatedFileCount: this.fileManager.getGeneratedFilePaths().length,
+                sandboxInstanceId: this.state.sandboxInstanceId || null,
+            });
+            return new Response('Preview artifact missing', {
                 status: 404,
                 headers: { 'Content-Type': 'text/plain' }
             });
         }
 
         // Serve file with correct Content-Type
-        const contentType = getMimeType(normalized) || 'application/octet-stream';
+        const contentType = getMimeType(resolvedPath || normalized) || 'application/octet-stream';
 
         this.logger().info('[BROWSER SERVING] Serving file', {
-            path: normalized,
+            path: resolvedPath || normalized,
             contentType
         });
 
@@ -739,7 +960,22 @@ export class CodeGeneratorAgent extends Agent<Env, AgentState> implements AgentI
 
         // For HTML files, inject base tag
         if (normalized.endsWith('.html') || contentType.includes('text/html')) {
-            const baseTag = `<base href="/">`;
+            if (isGenericFallbackPreviewHtml(content)) {
+                // Merge original query with recent user messages so follow-ups like
+                // "put a dog image in there" are reflected in the prompt-based preview.
+                const mergedQuery = this.getMergedQueryForPreview();
+                content = buildPromptBasedPreviewHtml(mergedQuery);
+                this.logger().info('[BROWSER SERVING] Replaced generic fallback preview with prompt-based HTML');
+            }
+
+            let baseHref = '/';
+            if (url.pathname.startsWith('/b-preview/')) {
+                const parts = url.pathname.split('/').filter(Boolean); // ["b-preview", agentId, token, ...]
+                if (parts.length >= 3) {
+                    baseHref = `/${parts[0]}/${parts[1]}/${parts[2]}/`;
+                }
+            }
+            const baseTag = `<base href="${baseHref}">`;
 
             // Inject base tag after <head> tag if present
             if (content.includes('<head>')) {
@@ -749,17 +985,53 @@ export class CodeGeneratorAgent extends Agent<Env, AgentState> implements AgentI
                 content = baseTag + '\n' + content;
             }
 
+            // For path-based preview URLs, root-absolute asset links like /assets/...
+            // bypass <base>. Rewrite src/href to include the preview path prefix.
+            if (baseHref !== '/') {
+                const basePrefix = baseHref.endsWith('/') ? baseHref.slice(0, -1) : baseHref;
+                content = content.replace(
+                    /\b(src|href)\s*=\s*(["'])([^"']*)\2/gi,
+                    (match: string, attr: string, quote: string, value: string, offset: number, full: string) => {
+                        if (attr.toLowerCase() === 'href') {
+                            const tagStart = full.lastIndexOf('<', offset);
+                            const tagEnd = full.lastIndexOf('>', offset);
+                            if (tagStart > tagEnd) {
+                                const tagSlice = full.slice(tagStart + 1, Math.min(tagStart + 16, full.length)).toLowerCase();
+                                if (tagSlice.startsWith('base') || tagSlice.startsWith('base ')) {
+                                    return match;
+                                }
+                            }
+                        }
+
+                        if (
+                            !value ||
+                            !value.startsWith('/') ||
+                            value.startsWith('//') ||
+                            value === basePrefix ||
+                            value.startsWith(`${basePrefix}/`)
+                        ) {
+                            return `${attr}=${quote}${value}${quote}`;
+                        }
+
+                        return `${attr}=${quote}${basePrefix}${value}${quote}`;
+                    }
+                );
+            }
+
             this.logger().info('[BROWSER SERVING] Injected base tag');
         }
 
-        return new Response(content, {
+        const isHead = request.method === 'HEAD';
+        return new Response(isHead ? null : content, {
             status: 200,
             headers: {
                 'Content-Type': contentType,
                 'Cache-Control': 'no-cache, no-store, must-revalidate',
                 'Access-Control-Allow-Origin': '*',
-                'Access-Control-Allow-Methods': 'GET, OPTIONS',
+                'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
                 'Access-Control-Allow-Headers': '*',
+                'Access-Control-Expose-Headers': 'X-Preview-Type',
+                'X-Preview-Type': 'sandbox',
                 'X-Sandbox-Type': 'browser-native'
             }
         });

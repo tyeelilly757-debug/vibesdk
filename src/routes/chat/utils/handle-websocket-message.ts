@@ -4,6 +4,7 @@ import { deduplicateMessages, isAssistantMessageDuplicate } from './deduplicate-
 import { logger } from '@/utils/logger';
 import { getFileType } from '@/utils/string';
 import { getPreviewUrl } from '@/lib/utils';
+import { apiClient } from '@/lib/api-client';
 import {
     setFileGenerating,
     appendFileChunk,
@@ -77,6 +78,7 @@ export interface HandleMessageDeps {
     isGenerating: boolean;
     urlChatId: string | undefined;
     behaviorType: BehaviorType;
+    chatId?: string;
     
     // Functions
     updateStage: (stageId: ProjectStage['id'], updates: Partial<Omit<ProjectStage, 'id'>>) => void;
@@ -577,6 +579,28 @@ export function createWebSocketMessageHandler(deps: HandleMessageDeps) {
                 setProjectStages((prev) => completeStages(prev, ['code']));
 
                 sendMessage(createAIMessage('generation-complete', 'Code generation has been completed.'));
+                if (!previewUrl) {
+                    logger.debug('🚀 Generation complete with no preview URL - requesting preview deployment');
+                    sendWebSocketMessage(websocket, 'preview');
+                    const previewAgentId = deps.chatId || (urlChatId && urlChatId !== 'new' ? urlChatId : undefined);
+                    if (previewAgentId) {
+                        void apiClient
+                            .deployPreview(previewAgentId)
+                            .then((response) => {
+                                if (response.success && response.data) {
+                                    let url = getPreviewUrl(response.data.previewURL, response.data.tunnelURL);
+                                    if (url) {
+                                        const sep = url.includes('?') ? '&' : '?';
+                                        url = `${url}${sep}t=${Date.now()}`;
+                                        setPreviewUrl(url);
+                                    }
+                                }
+                            })
+                            .catch((error) => {
+                                logger.warn('Preview deploy API call failed after generation complete', error);
+                            });
+                    }
+                }
                 
                 // Reset all phase indicators
                 setIsPhaseProgressActive(false);
@@ -592,7 +616,12 @@ export function createWebSocketMessageHandler(deps: HandleMessageDeps) {
 
             case 'deployment_completed': {
                 setIsPreviewDeploying(false);
-                const finalPreviewURL = getPreviewUrl(message.previewURL, message.tunnelURL);
+                let finalPreviewURL = getPreviewUrl(message.previewURL, message.tunnelURL);
+                // Cache-bust so refreshed content (e.g. fallback replacement) is always loaded
+                if (finalPreviewURL) {
+                    const sep = finalPreviewURL.includes('?') ? '&' : '?';
+                    finalPreviewURL = `${finalPreviewURL}${sep}t=${Date.now()}`;
+                }
                 setPreviewUrl(finalPreviewURL);
                 break;
             }
