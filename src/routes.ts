@@ -9,12 +9,15 @@ import Settings from './routes/settings/index';
 import AppsPage from './routes/apps';
 import AppView from './routes/app';
 import DiscoverPage from './routes/discover';
+import NotFound from './routes/not-found';
 import { ProtectedRoute } from './routes/protected-route';
+import { RouteErrorBoundary } from './components/ErrorBoundary';
 
 const routes = [
 	{
 		path: '/',
 		Component: App,
+		errorElement: React.createElement(RouteErrorBoundary),
 		children: [
 			{
 				index: true,
@@ -43,6 +46,10 @@ const routes = [
 			{
 				path: 'discover',
 				Component: DiscoverPage,
+			},
+			{
+				path: '*',
+				Component: NotFound,
 			},
 		],
 	},

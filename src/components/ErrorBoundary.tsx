@@ -1,10 +1,12 @@
 import * as Sentry from '@sentry/react';
 import { ReactNode } from 'react';
+import { useRouteError } from 'react-router';
 import { Button } from '@/components/ui/button';
 import { AlertCircle } from 'lucide-react';
 
 function ErrorFallback({ error, resetError }: { error: Error | unknown; resetError: () => void; }) {
   const errorMessage = error instanceof Error ? error.message : 'An unexpected error occurred';
+  const is404 = errorMessage.toLowerCase().includes('not found') || errorMessage === 'Page not found';
   return (
     <div className="flex min-h-screen items-center justify-center p-4">
       <div className="max-w-md w-full space-y-6 text-center">
@@ -13,9 +15,9 @@ function ErrorFallback({ error, resetError }: { error: Error | unknown; resetErr
         </div>
         
         <div className="space-y-2">
-          <h1 className="text-2xl font-bold">Something went wrong</h1>
+          <h1 className="text-2xl font-bold">{is404 ? 'Page not found' : 'Something went wrong'}</h1>
           <p className="text-muted-foreground">
-            An unexpected error occurred. Our team has been notified.
+            {is404 ? 'The page you\'re looking for doesn\'t exist or may have been moved.' : 'An unexpected error occurred. Our team has been notified.'}
           </p>
         </div>
         
@@ -64,3 +66,12 @@ export function ErrorBoundary({
 
 // Export the default fallback component for reuse
 export { ErrorFallback };
+
+/** For use as errorElement on routes - reads error from useRouteError() */
+export function RouteErrorBoundary() {
+	const error = useRouteError();
+	const resetError = () => window.location.reload();
+	const is404 = error instanceof Response && error.status === 404;
+	const displayError = is404 ? new Error('Page not found') : (error ?? new Error('Something went wrong'));
+	return <ErrorFallback error={displayError} resetError={resetError} />;
+}
